@@ -15,6 +15,7 @@ import (
 	dest "github.com/graphite-ng/carbon-relay-ng/destination"
 	"github.com/graphite-ng/carbon-relay-ng/matcher"
 	"github.com/graphite-ng/carbon-relay-ng/stats"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 // gzipPool provides a sync.Pool of initialized gzip.Writer's to avoid
@@ -40,9 +41,9 @@ type PubSub struct {
 	codec    string
 	psClient *pubsub.Client
 	psTopic  *pubsub.Topic
-	buf      chan []byte
+	buf      chan *util.Point
 	blocking bool
-	dispatch func(chan []byte, []byte, metrics.Gauge, metrics.Counter)
+	dispatch func(chan *util.Point, *util.Point, metrics.Gauge, metrics.Counter)
 
 	bufSize      int // amount of messages we can buffer up. each message is about 100B. so 1e7 is about 1GB.
 	flushMaxSize int
@@ -73,7 +74,7 @@ func NewPubSub(key, prefix, sub, regex, project, topic, format, codec string, bu
 		topic:     topic,
 		format:    format,
 		codec:     codec,
-		buf:       make(chan []byte, bufSize),
+		buf:       make(chan *util.Point, bufSize),
 		blocking:  blocking,
 
 		bufSize:      bufSize,
@@ -135,7 +136,7 @@ func (r *PubSub) run() {
 
 	for {
 		select {
-		case buf, ok := <-r.buf:
+		case point, ok := <-r.buf:
 			if !ok {
 				flush()
 				return
@@ -143,22 +144,17 @@ func (r *PubSub) run() {
 			r.numBuffered.Dec(1)
 
 			// flush first if this new buf is likely to breach our size limit (compression is not considered so it won't be exact)
-			if msgbuf.Len()+len(buf)+1 >= r.flushMaxSize {
+			if msgbuf.Len()+len(point.String())+1 >= r.flushMaxSize {
 				flush()
 			}
 
 			switch r.format {
 			case "plain":
 				// buf is already in graphite line format so write it directly into the buf
-				msgbuf.Write(buf)
+				msgbuf.WriteString(point.String())
 				msgbuf.WriteByte('\n')
 			case "pickle":
-				dp, err := dest.ParseDataPoint(buf)
-				if err != nil {
-					r.numParseError.Inc(1)
-					continue
-				}
-				msgbuf.Write(dest.Pickle(dp))
+				msgbuf.Write(dest.Pickle(point))
 			}
 			cnt++
 		case _ = <-ticker.C:
@@ -239,8 +235,8 @@ func (r *PubSub) publish(buf *bytes.Buffer, cnt int) {
 }
 
 // Dispatch is called to submit metrics. They will be in graphite 'plain' format no matter how they arrived.
-func (r *PubSub) Dispatch(buf []byte) {
-	r.dispatch(r.buf, buf, r.numBuffered, r.numDropBuffFull)
+func (r *PubSub) Dispatch(point *util.Point) {
+	r.dispatch(r.buf, point, r.numBuffered, r.numDropBuffFull)
 }
 
 // Flush is not currently implemented

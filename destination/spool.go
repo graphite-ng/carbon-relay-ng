@@ -6,6 +6,7 @@ import (
 	"github.com/Dieterbe/go-metrics"
 	"github.com/graphite-ng/carbon-relay-ng/nsqd"
 	"github.com/graphite-ng/carbon-relay-ng/stats"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 // sits in front of nsqd diskqueue.
@@ -100,9 +101,9 @@ func (s *Spool) Writer() {
 	}
 }
 
-func (s *Spool) Ingest(bulkData [][]byte) {
+func (s *Spool) Ingest(bulkData []*util.Point) {
 	for _, buf := range bulkData {
-		s.InBulk <- buf
+		s.InBulk <- []byte(buf.String())
 		time.Sleep(s.spoolSleep)
 	}
 }

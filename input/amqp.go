@@ -150,5 +150,5 @@ func (a *Amqp) dispatch(buf []byte) {
 		}
 	}
 
-	a.table.Dispatch(buf, val, ts)
+	a.table.Dispatch(key, val, ts)
 }

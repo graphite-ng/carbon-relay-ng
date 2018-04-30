@@ -1,13 +1,13 @@
 package route
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	dest "github.com/graphite-ng/carbon-relay-ng/destination"
 	"github.com/graphite-ng/carbon-relay-ng/matcher"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 type Config interface {
@@ -34,7 +34,7 @@ type consistentHashingConfig struct {
 }
 
 type Route interface {
-	Dispatch(buf []byte)
+	Dispatch(point *util.Point)
 	Match(s []byte) bool
 	Snapshot() Snapshot
 	Key() string
@@ -119,42 +119,38 @@ func (route *baseRoute) run() {
 	}
 }
 
-func (route *SendAllMatch) Dispatch(buf []byte) {
+func (route *SendAllMatch) Dispatch(point *util.Point) {
 	conf := route.config.Load().(Config)
 
 	for _, dest := range conf.Dests() {
-		if dest.Match(buf) {
+		if dest.Match(point.Key) {
 			// dest should handle this as quickly as it can
-			log.Info("route %s sending to dest %s: %s", route.key, dest.Key, buf)
-			dest.In <- buf
+			log.Info("route %s sending to dest %s: %s", route.key, dest.Key, point)
+			dest.In <- point
 		}
 	}
 }
 
-func (route *SendFirstMatch) Dispatch(buf []byte) {
+func (route *SendFirstMatch) Dispatch(point *util.Point) {
 	conf := route.config.Load().(Config)
 
 	for _, dest := range conf.Dests() {
-		if dest.Match(buf) {
+		if dest.Match(point.Key) {
 			// dest should handle this as quickly as it can
-			log.Info("route %s sending to dest %s: %s", route.key, dest.Key, buf)
-			dest.In <- buf
+			log.Info("route %s sending to dest %s: %s", route.key, dest.Key, point)
+			dest.In <- point
 			break
 		}
 	}
 }
 
-func (route *ConsistentHashing) Dispatch(buf []byte) {
+func (route *ConsistentHashing) Dispatch(point *util.Point) {
 	conf := route.config.Load().(consistentHashingConfig)
-	if pos := bytes.IndexByte(buf, ' '); pos > 0 {
-		name := buf[0:pos]
-		dest := conf.Dests()[conf.Hasher.GetDestinationIndex(name)]
-		// dest should handle this as quickly as it can
-		log.Info("route %s sending to dest %s: %s", route.key, dest.Key, name)
-		dest.In <- buf
-	} else {
-		log.Error("could not parse %s\n", buf)
-	}
+
+	dest := conf.Dests()[conf.Hasher.GetDestinationIndex(point.Key)]
+	// dest should handle this as quickly as it can
+	log.Info("route %s sending to dest %s: %s", route.key, dest.Key, point)
+	dest.In <- point
 }
 
 func (route *baseRoute) Key() string {

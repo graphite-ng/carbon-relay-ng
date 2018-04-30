@@ -222,8 +222,8 @@ func parseAggregateRequest(r *http.Request) (*aggregator.Aggregator, *handlerErr
 		Fun       string
 		OutFmt    string
 		Cache     bool
-		Interval  uint
-		Wait      uint
+		Interval  uint32
+		Wait      uint32
 		DropRaw   bool
 		Regex     string
 		Prefix    string `json:"omitempty"`

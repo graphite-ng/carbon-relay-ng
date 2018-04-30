@@ -3,9 +3,9 @@ package route
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/graphite-ng/carbon-relay-ng/util"
 	"github.com/lomik/go-carbon/persister"
 	"gopkg.in/raintank/schema.v1"
 )
@@ -36,29 +36,9 @@ func getSchemas(file string) (persister.WhisperSchemas, error) {
 // The given orgId will be applied to the MetricData, but note:
 // * when sending to api endpoint for hosted metrics (grafanaNet route), tsdb-gw will adjust orgId based on the apiKey used for authentication. Unless it runs in admin mode.
 // * kafka-mdm route doesn't authenticate and just uses whatever OrgId is specified
-func parseMetric(buf []byte, schemas persister.WhisperSchemas, orgId int) (*schema.MetricData, error) {
-	errFmt3Fields := "%q: need 3 fields"
-	errFmt := "%q: %s"
-
-	msg := strings.TrimSpace(string(buf))
-
-	elements := strings.Fields(msg)
-	if len(elements) != 3 {
-		return nil, fmt.Errorf(errFmt3Fields, msg)
-	}
-
-	val, err := strconv.ParseFloat(elements[1], 64)
-	if err != nil {
-		return nil, fmt.Errorf(errFmt, msg, err)
-	}
-
-	timestamp, err := strconv.ParseUint(elements[2], 10, 32)
-	if err != nil {
-		return nil, fmt.Errorf(errFmt, msg, err)
-	}
-
-	nameWithTags := elements[0]
-	elements = strings.Split(nameWithTags, ";")
+func parseMetric(point *util.Point, schemas persister.WhisperSchemas, orgId int) (*schema.MetricData, error) {
+	nameWithTags := string(point.Key)
+	elements := strings.Split(nameWithTags, ";")
 	name := elements[0]
 	tags := elements[1:]
 	sort.Strings(tags)
@@ -72,9 +52,9 @@ func parseMetric(buf []byte, schemas persister.WhisperSchemas, orgId int) (*sche
 		Name:     name,
 		Metric:   name,
 		Interval: s.Retentions[0].SecondsPerPoint(),
-		Value:    val,
+		Value:    point.Val,
 		Unit:     "unknown",
-		Time:     int64(timestamp),
+		Time:     int64(point.TS),
 		Mtype:    "gauge",
 		Tags:     tags,
 		OrgId:    orgId,

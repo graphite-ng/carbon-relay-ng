@@ -8,25 +8,25 @@ import (
 	"time"
 
 	"github.com/graphite-ng/carbon-relay-ng/clock"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 type Aggregator struct {
 	Fun          string `json:"fun"`
 	procConstr   func(val float64, ts uint32) Processor
-	in           chan msg       `json:"-"` // incoming metrics, already split in 3 fields
-	out          chan []byte    // outgoing metrics
-	Regex        string         `json:"regex,omitempty"`
-	Prefix       string         `json:"prefix,omitempty"`
-	Sub          string         `json:"substring,omitempty"`
-	regex        *regexp.Regexp // compiled version of Regex
-	prefix       []byte         // automatically generated based on Prefix or regex, for fast preMatch
-	substring    []byte         // based on Sub, for fast preMatch
+	out          chan *util.Point // outgoing metrics
+	Regex        string           `json:"regex,omitempty"`
+	Prefix       string           `json:"prefix,omitempty"`
+	Sub          string           `json:"substring,omitempty"`
+	regex        *regexp.Regexp   // compiled version of Regex
+	prefix       []byte           // automatically generated based on Prefix or regex, for fast preMatch
+	substring    []byte           // based on Sub, for fast preMatch
 	OutFmt       string
 	outFmt       []byte
 	Cache        bool
 	reCache      map[string]CacheEntry
-	Interval     uint                 // expected interval between values in seconds, we will quantize to make sure alginment to interval-spaced timestamps
-	Wait         uint                 // seconds to wait after quantized time value before flushing final outcome and ignoring future values that are sent too late.
+	Interval     uint32               // expected interval between values in seconds, we will quantize to make sure alignment to interval-spaced timestamps
+	Wait         uint32               // seconds to wait after quantized time value before flushing final outcome and ignoring future values that are sent too late.
 	DropRaw      bool                 // drop raw values "consumed" by this aggregator
 	aggregations map[aggkey]Processor // aggregations in process: one for each quantized timestamp and output key, i.e. for each output metric.
 	snapReq      chan bool            // chan to issue snapshot requests on
@@ -35,12 +35,6 @@ type Aggregator struct {
 	wg           sync.WaitGroup       // tracks worker running state
 	now          func() time.Time     // returns current time. wraps time.Now except in some unit tests
 	tick         <-chan time.Time     // controls when to flush
-}
-
-type msg struct {
-	buf [][]byte
-	val float64
-	ts  uint32
 }
 
 // regexToPrefix inspects the regex and returns the longest static prefix part of the regex
@@ -72,11 +66,11 @@ func regexToPrefix(regex string) []byte {
 }
 
 // New creates an aggregator
-func New(fun, regex, prefix, sub, outFmt string, cache bool, interval, wait uint, dropRaw bool, out chan []byte) (*Aggregator, error) {
+func New(fun, regex, prefix, sub, outFmt string, cache bool, interval, wait uint32, dropRaw bool, out chan *util.Point) (*Aggregator, error) {
 	return NewMocked(fun, regex, prefix, sub, outFmt, cache, interval, wait, dropRaw, out, 2000, time.Now, clock.AlignedTick(time.Duration(interval)*time.Second))
 }
 
-func NewMocked(fun, regex, prefix, sub, outFmt string, cache bool, interval, wait uint, dropRaw bool, out chan []byte, inBuf int, now func() time.Time, tick <-chan time.Time) (*Aggregator, error) {
+func NewMocked(fun, regex, prefix, sub, outFmt string, cache bool, interval, wait uint32, dropRaw bool, out chan *util.Point, inBuf int, now func() time.Time, tick <-chan time.Time) (*Aggregator, error) {
 	regexObj, err := regexp.Compile(regex)
 	if err != nil {
 		return nil, err
@@ -99,7 +93,6 @@ func NewMocked(fun, regex, prefix, sub, outFmt string, cache bool, interval, wai
 	a := &Aggregator{
 		fun,
 		procConstr,
-		make(chan msg, inBuf),
 		out,
 		regex,
 		string(prefixBytes),
@@ -129,10 +122,10 @@ func NewMocked(fun, regex, prefix, sub, outFmt string, cache bool, interval, wai
 
 type aggkey struct {
 	key string
-	ts  uint
+	ts  uint32
 }
 
-func (a *Aggregator) AddOrCreate(key string, ts uint32, quantized uint, value float64) {
+func (a *Aggregator) AddOrCreate(key string, ts uint32, quantized uint32, value float64) {
 	k := aggkey{
 		key,
 		quantized,
@@ -140,23 +133,23 @@ func (a *Aggregator) AddOrCreate(key string, ts uint32, quantized uint, value fl
 	proc, ok := a.aggregations[k]
 	if ok {
 		proc.Add(value, ts)
-	} else if quantized > uint(a.now().Unix())-a.Wait {
+	} else if quantized > uint32(a.now().Unix())-a.Wait {
 		proc = a.procConstr(value, ts)
 		a.aggregations[k] = proc
 	}
 }
 
 // Flush finalizes and removes aggregations that are due
-func (a *Aggregator) Flush(ts uint) {
+func (a *Aggregator) Flush(ts uint32) {
 	for k, proc := range a.aggregations {
 		if k.ts < ts {
 			results, ok := proc.Flush()
 			if ok {
 				if len(results) == 1 {
-					a.out <- []byte(fmt.Sprintf("%s %f %d", k.key, results[0].val, k.ts))
+					a.out <- &util.Point{[]byte(k.key), results[0].val, k.ts}
 				} else {
 					for _, result := range results {
-						a.out <- []byte(fmt.Sprintf("%s.%s %f %d", k.key, result.fcnName, result.val, k.ts))
+						a.out <- &util.Point{[]byte(fmt.Sprintf("%s.%s", k.key, result.fcnName)), result.val, k.ts}
 					}
 				}
 			}
@@ -171,23 +164,19 @@ func (a *Aggregator) Shutdown() {
 	a.wg.Wait()
 }
 
-func (a *Aggregator) AddMaybe(buf [][]byte, val float64, ts uint32) bool {
-	if !a.PreMatch(buf[0]) {
+func (a *Aggregator) AddMaybe(point *util.Point) bool {
+	if !a.PreMatch(point.Key) {
 		return false
 	}
 
-	if a.DropRaw {
-		_, ok := a.matchWithCache(buf[0])
-		if !ok {
-			return false
-		}
+	outKey, ok := a.matchWithCache(point.Key)
+	if !ok {
+		return false
 	}
 
-	a.in <- msg{
-		buf,
-		val,
-		ts,
-	}
+	ts := point.TS
+	quantized := ts - (ts % a.Interval)
+	a.AddOrCreate(outKey, point.TS, quantized, point.Val)
 
 	return a.DropRaw
 }
@@ -195,11 +184,11 @@ func (a *Aggregator) AddMaybe(buf [][]byte, val float64, ts uint32) bool {
 //PreMatch checks if the specified metric matches the specified prefix and/or substring
 //If prefix isn't explicitly specified it will be derived from the regex where possible.
 //If this returns false the metric will not be passed through to the main regex matching stage.
-func (a *Aggregator) PreMatch(buf []byte) bool {
-	if len(a.prefix) > 0 && !bytes.HasPrefix(buf, a.prefix) {
+func (a *Aggregator) PreMatch(key []byte) bool {
+	if len(a.prefix) > 0 && !bytes.HasPrefix(key, a.prefix) {
 		return false
 	}
-	if len(a.substring) > 0 && !bytes.Contains(buf, a.substring) {
+	if len(a.substring) > 0 && !bytes.Contains(key, a.substring) {
 		return false
 	}
 	return true
@@ -253,18 +242,9 @@ func (a *Aggregator) matchWithCache(key []byte) (string, bool) {
 func (a *Aggregator) run() {
 	for {
 		select {
-		case msg := <-a.in:
-			// note, we rely here on the fact that the packet has already been validated
-			outKey, ok := a.matchWithCache(msg.buf[0])
-			if !ok {
-				continue
-			}
-			ts := uint(msg.ts)
-			quantized := ts - (ts % a.Interval)
-			a.AddOrCreate(outKey, msg.ts, quantized, msg.val)
 		case now := <-a.tick:
 			thresh := now.Add(-time.Duration(a.Wait) * time.Second)
-			a.Flush(uint(thresh.Unix()))
+			a.Flush(uint32(thresh.Unix()))
 
 			// if cache is enabled, clean it out of stale entries
 			// it's not ideal to block our channel while flushing AND cleaning up the cache
@@ -291,7 +271,6 @@ func (a *Aggregator) run() {
 				a.Fun,
 				a.procConstr,
 				nil,
-				nil,
 				a.Regex,
 				a.Prefix,
 				a.Sub,
@@ -317,7 +296,7 @@ func (a *Aggregator) run() {
 			a.snapResp <- s
 		case <-a.shutdown:
 			thresh := a.now().Add(-time.Duration(a.Wait) * time.Second)
-			a.Flush(uint(thresh.Unix()))
+			a.Flush(uint32(thresh.Unix()))
 			a.wg.Done()
 			return
 

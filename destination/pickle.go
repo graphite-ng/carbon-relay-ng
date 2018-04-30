@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 
+	"github.com/graphite-ng/carbon-relay-ng/util"
 	"github.com/kisielk/og-rek"
 )
 
-func Pickle(dp *Datapoint) []byte {
+func Pickle(dp *util.Point) []byte {
 	dataBuf := &bytes.Buffer{}
 	pickler := ogórek.NewEncoder(dataBuf)
 
 	// pickle format (in python talk): [(path, (timestamp, value)), ...]
-	point := []interface{}{string(dp.Name), []interface{}{dp.Time, dp.Val}}
+	point := []interface{}{string(dp.Key), []interface{}{dp.TS, dp.Val}}
 	list := []interface{}{point}
 	pickler.Encode(list)
 	messageBuf := &bytes.Buffer{}

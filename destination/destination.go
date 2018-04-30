@@ -52,7 +52,7 @@ type Destination struct {
 	RouteName            string
 
 	// set in/via Run()
-	In                  chan []byte        `json:"-"` // incoming metrics
+	In                  chan *util.Point   `json:"-"` // incoming metrics
 	shutdown            chan bool          // signals shutdown internally
 	spool               *Spool             // queue used if spooling enabled
 	connUpdates         chan *Conn         // when the dest changes (possibly nil)
@@ -179,7 +179,7 @@ func (dest *Destination) Run() {
 	if dest.In != nil {
 		panic(fmt.Sprintf("Run() called on already running dest '%s'", dest.Key))
 	}
-	dest.In = make(chan []byte)
+	dest.In = make(chan *util.Point)
 	dest.shutdown = make(chan bool)
 	dest.connUpdates = make(chan *Conn)
 	dest.inConnUpdate = make(chan bool)
@@ -261,13 +261,13 @@ func (dest *Destination) relay() {
 
 	// try to send the data on the buffered tcp conn
 	// if that's slow or down, discard the data
-	nonBlockingSend := func(buf []byte) {
+	nonBlockingSend := func(point *util.Point) {
 		select {
 		// this op won't succeed as long as the conn is busy processing/flushing
-		case conn.In <- buf:
+		case conn.In <- point:
 			conn.numBuffered.Inc(1)
 		default:
-			log.Info("dest %s %s nonBlockingSend -> dropping due to slow conn\n", dest.Key, buf)
+			log.Debug("dest %s %s nonBlockingSend -> dropping due to slow conn\n", dest.Key, point)
 			// TODO check if it was because conn closed
 			// we don't want to just buffer everything in memory,
 			// it would probably keep piling up until OOM.  let's just drop the traffic.
@@ -278,12 +278,12 @@ func (dest *Destination) relay() {
 
 	// try to send the data to the spool
 	// if slow or down, drop and move on
-	nonBlockingSpool := func(buf []byte) {
+	nonBlockingSpool := func(point *util.Point) {
 		select {
-		case dest.spool.InRT <- buf:
-			log.Info("dest %s %s nonBlockingSpool -> added to spool\n", dest.Key, buf)
+		case dest.spool.InRT <- []byte(point.String()):
+			log.Debug("dest %s %s nonBlockingSpool -> added to spool\n", dest.Key, point)
 		default:
-			log.Info("dest %s %s nonBlockingSpool -> dropping due to slow spool\n", dest.Key, buf)
+			log.Debug("dest %s %s nonBlockingSpool -> dropping due to slow spool\n", dest.Key, point)
 			dest.numDropSlowSpool.Inc(1)
 		}
 	}
@@ -354,17 +354,22 @@ func (dest *Destination) relay() {
 			return
 		case buf := <-toUnspool:
 			// we know that conn != nil here because toUnspool is set above
-			log.Info("dest %v %s received from spool -> nonBlockingSend\n", dest.Key, buf)
-			nonBlockingSend(buf)
-		case buf := <-dest.In:
-			if conn != nil {
-				log.Info("dest %v %s received from In -> nonBlockingSend\n", dest.Key, buf)
-				nonBlockingSend(buf)
-			} else if dest.Spool {
-				log.Info("dest %v %s received from In -> nonBlockingSpool\n", dest.Key, buf)
-				nonBlockingSpool(buf)
+			log.Debug("dest %v %s received from spool -> nonBlockingSend\n", dest.Key, buf)
+			point, err := ParseDataPoint(buf)
+			if err != nil {
+				log.Error("error parsing %s received from spool: %s", buf, err)
 			} else {
-				log.Info("dest %v %s received from In -> no conn no spool -> drop\n", dest.Key, buf)
+				nonBlockingSend(point)
+			}
+		case point := <-dest.In:
+			if conn != nil {
+				log.Debug("dest %v %s received from In -> nonBlockingSend\n", dest.Key, point)
+				nonBlockingSend(point)
+			} else if dest.Spool {
+				log.Debug("dest %v %s received from In -> nonBlockingSpool\n", dest.Key, point)
+				nonBlockingSpool(point)
+			} else {
+				log.Debug("dest %v %s received from In -> no conn no spool -> drop\n", dest.Key, point)
 				dest.numDropNoConnNoSpool.Inc(1)
 			}
 		}

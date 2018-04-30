@@ -13,8 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/graphite-ng/carbon-relay-ng/stats"
-	"strconv"
-	"strings"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 // Publishes data points to the native AWS metrics service: CloudWatch
@@ -28,9 +27,9 @@ type CloudWatch struct {
 	putMetricDataInput cloudwatch.PutMetricDataInput
 
 	baseRoute
-	buf      chan []byte
+	buf      chan *util.Point
 	blocking bool
-	dispatch func(chan []byte, []byte, metrics.Gauge, metrics.Counter)
+	dispatch func(chan *util.Point, *util.Point, metrics.Gauge, metrics.Counter)
 
 	bufSize      int // amount of messages we can buffer up. each message is about 100B. so 1e7 is about 1GB.
 	flushMaxSize int
@@ -61,7 +60,7 @@ func NewCloudWatch(key, prefix, sub, regex, awsProfile, awsRegion, awsNamespace 
 		awsNamespace:       awsNamespace,
 		putMetricDataInput: cloudwatch.PutMetricDataInput{Namespace: aws.String(awsNamespace)},
 		baseRoute:          baseRoute{sync.Mutex{}, atomic.Value{}, key},
-		buf:                make(chan []byte, bufSize),
+		buf:                make(chan *util.Point, bufSize),
 		blocking:           blocking,
 		bufSize:            bufSize,
 		flushMaxSize:       flushMaxSize,
@@ -128,36 +127,18 @@ func (r *CloudWatch) run() {
 
 	for {
 		select {
-		case buf, ok := <-r.buf:
+		case point, ok := <-r.buf:
 			if !ok {
 				flush()
 				return
 			}
 			r.numBuffered.Dec(1)
 
-			// Parse metric data
-			msg := strings.TrimSpace(string(buf))
-			elements := strings.Fields(msg)
-			if len(elements) != 3 {
-				log.Error("RouteCloudWatch: need 3 fields")
-				continue
-			}
-			val, err := strconv.ParseFloat(elements[1], 64)
-			if err != nil {
-				log.Error("RouteCloudWatch: unable to parse value", err)
-				continue
-			}
-			timestamp, err := strconv.ParseInt(elements[2], 10, 32)
-			if err != nil {
-				log.Error("RouteCloudWatch: unable to parse timestamp", err)
-				continue
-			}
-
 			// Write new metric data to slice
 			newDatum := &cloudwatch.MetricDatum{
-				MetricName: aws.String(elements[0]),
-				Timestamp:  aws.Time(time.Unix(timestamp, 0)),
-				Value:      aws.Float64(val),
+				MetricName: aws.String(string(point.Key)),
+				Timestamp:  aws.Time(time.Unix(int64(point.TS), 0)),
+				Value:      aws.Float64(point.Val),
 			}
 			if len(r.awsDimensions) > 0 {
 				newDatum.Dimensions = r.awsDimensions
@@ -206,8 +187,8 @@ func (r *CloudWatch) publish(metricData cloudwatch.PutMetricDataInput, cnt int) 
 }
 
 // Dispatch is called to submit metrics. They will be in graphite 'plain' format no matter how they arrived.
-func (r *CloudWatch) Dispatch(buf []byte) {
-	r.dispatch(r.buf, buf, r.numBuffered, r.numDropBuffFull)
+func (r *CloudWatch) Dispatch(point *util.Point) {
+	r.dispatch(r.buf, point, r.numBuffered, r.numDropBuffFull)
 }
 
 // Flush is not currently implemented

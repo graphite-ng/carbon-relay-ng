@@ -1,7 +1,6 @@
 package table
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/graphite-ng/carbon-relay-ng/rewriter"
 	"github.com/graphite-ng/carbon-relay-ng/route"
 	"github.com/graphite-ng/carbon-relay-ng/stats"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 type TableConfig struct {
@@ -30,7 +30,8 @@ type Table struct {
 	SpoolDir      string
 	numBlacklist  metrics.Counter
 	numUnroutable metrics.Counter
-	In            chan []byte `json:"-"` // channel api to trade in some performance for encapsulation, for aggregators
+	In            chan *util.Point `json:"-"` // channel api to trade in some performance for encapsulation, for ingest
+	AggIn         chan *util.Point `json:"-"` // channel api to trade in some performance for encapsulation, for aggregators
 }
 
 type TableSnapshot struct {
@@ -41,14 +42,15 @@ type TableSnapshot struct {
 	SpoolDir    string
 }
 
-func New(spoolDir string) *Table {
+func New(spoolDir string, inBuf int) *Table {
 	t := &Table{
 		sync.Mutex{},
 		atomic.Value{},
 		spoolDir,
 		stats.Counter("unit=Metric.direction=blacklist"),
 		stats.Counter("unit=Metric.direction=unroutable"),
-		make(chan []byte),
+		make(chan *util.Point, inBuf),
+		make(chan *util.Point),
 	}
 
 	t.config.Store(TableConfig{
@@ -59,15 +61,26 @@ func New(spoolDir string) *Table {
 	})
 
 	go func() {
-		for buf := range t.In {
-			t.DispatchAggregate(buf)
+		for point := range t.In {
+			t.DispatchIn(point)
 		}
 	}()
+
+	go func() {
+		for point := range t.AggIn {
+			t.DispatchAggregate(point)
+		}
+	}()
+
 	return t
 }
 
-func (table *Table) GetIn() chan []byte {
+func (table *Table) GetIn() chan *util.Point {
 	return table.In
+}
+
+func (table *Table) GetAggIn() chan *util.Point {
+	return table.AggIn
 }
 
 func (table *Table) GetSpoolDir() string {
@@ -77,73 +90,73 @@ func (table *Table) GetSpoolDir() string {
 // Dispatch is the entrypoint to send data into the table.
 // it dispatches incoming metrics into matching aggregators and routes,
 // after checking against the blacklist
-// buf is assumed to have no whitespace at the end
+// key is assumed to have no whitespace at the end
 func (table *Table) Dispatch(buf []byte, val float64, ts uint32) {
-	buf_copy := make([]byte, len(buf))
-	copy(buf_copy, buf)
-	log.Debug("table received packet %s", buf_copy)
+	key := make([]byte, len(buf))
+	copy(key, buf)
+	table.In <- &util.Point{key, val, ts}
+}
 
-	fields := bytes.Fields(buf_copy)
+func (table *Table) DispatchIn(point *util.Point) {
+	log.Debug("table received point '%s'", point)
 
 	conf := table.config.Load().(TableConfig)
 
 	for _, matcher := range conf.blacklist {
-		if matcher.Match(fields[0]) {
+		if matcher.Match(point.Key) {
 			table.numBlacklist.Inc(1)
-			log.Debug("table dropped %s, matched blacklist entry %s", buf_copy, matcher)
+			log.Debug("table dropped %s, matched blacklist entry %s", point.Key, matcher)
 			return
 		}
 	}
 
 	for _, rw := range conf.rewriters {
-		fields[0] = rw.Do(fields[0])
+		point.Key = rw.Do(point.Key)
 	}
 
 	for _, aggregator := range conf.aggregators {
 		// we rely on incoming metrics already having been validated
-		dropRaw := aggregator.AddMaybe(fields, val, ts)
+		dropRaw := aggregator.AddMaybe(point)
 		if dropRaw {
-			log.Debug("table dropped %s, matched dropRaw aggregator %s", buf_copy, aggregator.Regex)
+			log.Debug("table dropped %s, matched dropRaw aggregator %s", point.Key, aggregator.Regex)
 			return
 		}
 	}
 
-	final := bytes.Join(fields, []byte(" "))
-
 	routed := false
 
 	for _, route := range conf.routes {
-		if route.Match(fields[0]) {
+		if route.Match(point.Key) {
 			routed = true
-			log.Debug("table sending to route: %s", final)
-			route.Dispatch(final)
+			log.Debug("table sending to route: %s", point)
+			route.Dispatch(point)
 		}
 	}
 
 	if !routed {
 		table.numUnroutable.Inc(1)
-		log.Info("unrouteable: %s\n", final)
+		log.Info("unrouteable: %s\n", point)
 	}
 }
 
 // DispatchAggregate dispatches aggregation output by routing metrics into the matching routes.
 // buf is assumed to have no whitespace at the end
-func (table *Table) DispatchAggregate(buf []byte) {
+func (table *Table) DispatchAggregate(point *util.Point) {
 	conf := table.config.Load().(TableConfig)
 	routed := false
-	log.Debug("table received aggregate packet %s", buf)
+	log.Debug("table received aggregate packet %s", point)
 
 	for _, route := range conf.routes {
-		if route.Match(buf) {
+		if route.Match(point.Key) {
 			routed = true
-			log.Info("table sending to route: %s", buf)
-			route.Dispatch(buf)
+			log.Info("table sending to route: %s", point)
+			route.Dispatch(point)
 		}
 	}
 
 	if !routed {
 		table.numUnroutable.Inc(1)
-		log.Info("unrouteable: %s\n", buf)
+		log.Info("unrouteable: %s\n", point)
 	}
 
 }
@@ -474,7 +487,7 @@ func (table *Table) Print() (str string) {
 }
 
 func InitFromConfig(config cfg.Config) (*Table, error) {
-	table := New(config.Spool_dir)
+	table := New(config.Spool_dir, 1000)
 
 	err := table.InitCmd(config)
 	if err != nil {
@@ -553,7 +566,7 @@ func (table *Table) InitBlacklist(config cfg.Config) error {
 
 func (table *Table) InitAggregation(config cfg.Config) error {
 	for i, aggConfig := range config.Aggregation {
-		agg, err := aggregator.New(aggConfig.Function, aggConfig.Regex, aggConfig.Prefix, aggConfig.Substr, aggConfig.Format, aggConfig.Cache, uint(aggConfig.Interval), uint(aggConfig.Wait), aggConfig.DropRaw, table.In)
+		agg, err := aggregator.New(aggConfig.Function, aggConfig.Regex, aggConfig.Prefix, aggConfig.Substr, aggConfig.Format, aggConfig.Cache, aggConfig.Interval, aggConfig.Wait, aggConfig.DropRaw, table.AggIn)
 		if err != nil {
 			log.Error(err.Error())
 			return fmt.Errorf("could not add aggregation #%d", i+1)

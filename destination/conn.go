@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"time"
 
 	"github.com/Dieterbe/go-metrics"
 	"github.com/graphite-ng/carbon-relay-ng/stats"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 var keepsafe_initial_cap = 100000 // not very important
@@ -17,14 +17,14 @@ var keepsafe_initial_cap = 100000 // not very important
 // (endpoint down, delayed timeout, etc), so it should be at least as long as the flush interval
 var keepsafe_keep_duration = time.Duration(10 * time.Second)
 
-var newLine = []byte{'\n'}
+var newLine = "\n"
 
 // Conn represents a connection to a tcp endpoint
 type Conn struct {
 	conn        *net.TCPConn
 	buffered    *Writer
 	shutdown    chan bool
-	In          chan []byte
+	In          chan *util.Point
 	dest        *Destination // which dest do we correspond to
 	up          bool
 	pickle      bool
@@ -64,7 +64,7 @@ func NewConn(addr string, dest *Destination, periodFlush time.Duration, pickle b
 		conn:              conn,
 		buffered:          NewWriter(conn, ioBufSize, dest.Key),
 		shutdown:          make(chan bool, 1), // when we write here, HandleData() may not be running anymore to read from the chan
-		In:                make(chan []byte, connBufSize),
+		In:                make(chan *util.Point, connBufSize),
 		dest:              dest,
 		up:                true,
 		pickle:            pickle,
@@ -129,16 +129,16 @@ func (c *Conn) checkEOF() {
 // all these messages should potentially be resubmitted, because we're not confident about their delivery
 // note: getting this data means resetting it! so handle it wisely.
 // we also read out the In channel until it blocks.  Don't send any more input after calling this.
-func (c *Conn) getRedo() [][]byte {
+func (c *Conn) getRedo() []*util.Point {
 	// drain In queue in case we still had some data buffered.
 	// normally this channel should already have been closed by the time we call this, but this is hard/complicated to enforce
 	// so instead let's leverage a select. as soon as it blocks (due to chan close or no more input but not closed yet) we know we're
 	// done reading and move on. it's easy to prove in the implementer that we don't send any more data to In after calling this
 	for {
 		select {
-		case buf := <-c.In:
+		case point := <-c.In:
 			c.numBuffered.Dec(1)
-			c.keepSafe.Add(buf)
+			c.keepSafe.Add(point)
 		default:
 			return c.keepSafe.GetAll()
 		}
@@ -173,14 +173,14 @@ func (c *Conn) HandleData() {
 		select { // handle incoming data or flush/shutdown commands
 		// note that Writer.Write() can potentially cause a flush and hence block
 		// choose the size of In based on how long these loop iterations take
-		case buf := <-c.In:
+		case point := <-c.In:
 			// seems to take about 30 micros when writing log to disk, 10 micros otherwise (100k messages/second)
 			active = time.Now()
 			c.numBuffered.Dec(1)
 			action = "write"
-			log.Info("conn %s HandleData: writing %s\n", c.dest.Key, buf)
-			c.keepSafe.Add(buf)
-			n, err := c.Write(buf)
+			log.Debug("conn %s HandleData: writing '%s'\n", c.dest.Key, point)
+			c.keepSafe.Add(point)
+			n, err := c.Write(point)
 			if err != nil {
 				log.Warning("conn %s write error: %s\n", c.dest.Key, err)
 				log.Debug("conn %s setting up=false\n", c.dest.Key)
@@ -241,29 +241,20 @@ func (c *Conn) HandleData() {
 
 // returns a network/write error, so that it can be retried later
 // deals with pickle errors internally because retrying wouldn't help anyway
-func (c *Conn) Write(buf []byte) (int, error) {
+func (c *Conn) Write(point *util.Point) (int, error) {
+	var buf []byte
 	if c.pickle {
-		dp, err := ParseDataPoint(buf)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			c.numDropBadPickle.Inc(1)
-			return 0, nil
-		}
-		buf = Pickle(dp)
+		buf = Pickle(point)
+	} else {
+		buf = []byte(point.String() + newLine)
 	}
 	written := 0
 	size := len(buf)
 	n, err := c.buffered.Write(buf)
 	written += n
-	if err == nil && size == n && !c.pickle {
-		size = 1
-		n, err = c.buffered.Write(newLine)
-		written += n
-	}
 	if err != nil {
 		c.numErrWrite.Inc(1)
-	}
-	if err == nil && size != n {
+	} else if size != n {
 		c.numErrTruncated.Inc(1)
 		err = fmt.Errorf("truncated write: %s", buf)
 	}

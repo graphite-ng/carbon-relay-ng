@@ -67,6 +67,6 @@ func (p *Plain) Handle(c net.Conn) {
 			}
 		}
 
-		p.table.Dispatch(buf, val, ts)
+		p.table.Dispatch(key, val, ts)
 	}
 }

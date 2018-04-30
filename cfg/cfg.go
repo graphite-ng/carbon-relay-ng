@@ -35,8 +35,8 @@ type Aggregation struct {
 	Substr   string
 	Format   string
 	Cache    bool
-	Interval int
-	Wait     int
+	Interval uint32
+	Wait     uint32
 	DropRaw  bool
 }
 

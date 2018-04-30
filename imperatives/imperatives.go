@@ -12,6 +12,7 @@ import (
 	"github.com/graphite-ng/carbon-relay-ng/matcher"
 	"github.com/graphite-ng/carbon-relay-ng/rewriter"
 	"github.com/graphite-ng/carbon-relay-ng/route"
+	"github.com/graphite-ng/carbon-relay-ng/util"
 	"github.com/taylorchu/toki"
 )
 
@@ -161,7 +162,7 @@ type Table interface {
 	DelRoute(key string) error
 	UpdateDestination(key string, index int, opts map[string]string) error
 	UpdateRoute(key string, opts map[string]string) error
-	GetIn() chan []byte
+	GetAggIn() chan *util.Point
 	GetSpoolDir() string
 }
 
@@ -297,7 +298,7 @@ func readAddAgg(s *toki.Scanner, table Table) error {
 		}
 	}
 
-	agg, err := aggregator.New(fun, regex, prefix, sub, outFmt, cache, uint(interval), uint(wait), dropRaw, table.GetIn())
+	agg, err := aggregator.New(fun, regex, prefix, sub, outFmt, cache, uint32(interval), uint32(wait), dropRaw, table.GetAggIn())
 	if err != nil {
 		return err
 	}

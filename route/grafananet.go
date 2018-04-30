@@ -28,7 +28,7 @@ type GrafanaNet struct {
 	baseRoute
 	addr    string
 	apiKey  string
-	buf     chan []byte
+	buf     chan *util.Point
 	schemas persister.WhisperSchemas
 
 	bufSize      int // amount of messages we can buffer up. each message is about 100B. so 1e7 is about 1GB.
@@ -37,7 +37,7 @@ type GrafanaNet struct {
 	timeout      time.Duration
 	sslVerify    bool
 	blocking     bool
-	dispatch     func(chan []byte, []byte, metrics.Gauge, metrics.Counter)
+	dispatch     func(chan *util.Point, *util.Point, metrics.Gauge, metrics.Counter)
 	concurrency  int
 	orgId        int
 	writeQueues  []chan []byte
@@ -75,7 +75,7 @@ func NewGrafanaNet(key, prefix, sub, regex, addr, apiKey, schemasFile string, sp
 		baseRoute: baseRoute{sync.Mutex{}, atomic.Value{}, key},
 		addr:      addr,
 		apiKey:    apiKey,
-		buf:       make(chan []byte, bufSize), // takes about 228MB on 64bit
+		buf:       make(chan *util.Point, bufSize), // takes about 228MB on 64bit
 		schemas:   schemas,
 
 		bufSize:      bufSize,
@@ -177,19 +177,17 @@ func (route *GrafanaNet) run() {
 	ticker := time.NewTicker(route.flushMaxWait)
 	for {
 		select {
-		case buf := <-route.buf:
+		case point := <-route.buf:
 			route.numBuffered.Dec(1)
-			md, err := parseMetric(buf, route.schemas, route.orgId)
+			md, err := parseMetric(point, route.schemas, route.orgId)
 			if err != nil {
 				log.Error("RouteGrafanaNet: %s", err)
 				continue
 			}
 			md.SetId()
 
-			//re-use our []byte slice to save an allocation.
-			buf = md.KeyBySeries(buf[:0])
 			hasher.Reset()
-			hasher.Write(buf)
+			hasher.Write([]byte(md.Name))
 			shard := int(hasher.Sum32() % uint32(route.concurrency))
 			metrics[shard] = append(metrics[shard], md)
 			if len(metrics[shard]) == route.flushMaxNum {
@@ -262,11 +260,11 @@ func (route *GrafanaNet) flush(shard int) {
 	route.wg.Done()
 }
 
-func (route *GrafanaNet) Dispatch(buf []byte) {
+func (route *GrafanaNet) Dispatch(point *util.Point) {
 	//conf := route.config.Load().(Config)
 	// should return as quickly as possible
-	log.Info("route %s sending to dest %s: %s", route.key, route.addr, buf)
-	route.dispatch(route.buf, buf, route.numBuffered, route.numDropBuffFull)
+	log.Info("route %s sending to dest %s: %s", route.key, route.addr, point)
+	route.dispatch(route.buf, point, route.numBuffered, route.numDropBuffFull)
 }
 
 func (route *GrafanaNet) Flush() error {

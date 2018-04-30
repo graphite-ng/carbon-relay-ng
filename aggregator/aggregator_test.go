@@ -2,9 +2,10 @@ package aggregator
 
 import (
 	"bytes"
-	"strconv"
 	"testing"
 	"time"
+
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 func TestScanner(t *testing.T) {
@@ -213,16 +214,16 @@ func BenchmarkAggregator5Aggregates100PointsPerAggregateWithReCache(b *testing.B
 
 func benchmarkAggregator(aggregates, pointsPerAggregate int, match string, cache bool, b *testing.B) {
 	//fmt.Println("BenchmarkAggregator", aggregates, pointsPerAggregate, "with b.N", b.N)
-	out := make(chan []byte)
+	out := make(chan *util.Point)
 	done := make(chan struct{})
 	go func(match string) {
 		count := 0
 		for v := range out {
 			count += 1
-			if bytes.HasPrefix(v, []byte("aggregated.totals.abc.ignoreme")) {
+			if bytes.HasPrefix(v.Key, []byte("aggregated.totals.abc.ignoreme")) {
 				continue
 			}
-			if string(v[33:39]) != match {
+			if string(v.Key[33:39]) != match {
 				b.Fatalf("expected 'aggregated.totals.abc.<10 random chars> %s... <ts>'. got: %q", match, v)
 			}
 			//	if count%100 == 0 {
@@ -269,19 +270,17 @@ func benchmarkAggregator(aggregates, pointsPerAggregate int, match string, cache
 
 	// tinfo holds all data to represent a point in time during the bench run
 	type tinfo struct {
-		ts    uint32 // the timestamp for the data at each point
-		tsBuf []byte // ascii representation for the timestamp
-		wall  int64  // the fake wall clock time at each point
+		ts   uint32 // the timestamp for the data at each point
+		wall int64  // the fake wall clock time at each point
 	}
 	var tinfos []tinfo
 	for t := uint32(1000); t < uint32(1000+(10*b.N)); t += 5 {
 		tinfos = append(tinfos, tinfo{
-			ts:    t,
-			tsBuf: strconv.AppendUint(nil, uint64(t), 10),
-			wall:  int64(t + 12),
+			ts:   t,
+			wall: int64(t + 12),
 		})
 	}
-	val := strconv.AppendUint(nil, 1, 10)
+	val := 1
 
 	regex := `^raw\.(...)\.([A-Za-z0-9_-]+)$`
 	outFmt := "aggregated.totals.$1.$2"
@@ -301,12 +300,12 @@ func benchmarkAggregator(aggregates, pointsPerAggregate int, match string, cache
 		//	fmt.Println("setting clock to", wall[i], "and sending", len(inputs)/2, "will go through. for ts", string(ts))
 		clock.Set(t.wall)
 		for _, input := range inputs {
-			buf := [][]byte{
+			buf := &util.Point{
 				input,
-				val,
-				t.tsBuf,
+				float64(val),
+				t.ts,
 			}
-			agg.AddMaybe(buf, 1, t.ts)
+			agg.AddMaybe(buf)
 		}
 	}
 	// we must make sure to get the final aggregated point.
@@ -315,12 +314,12 @@ func benchmarkAggregator(aggregates, pointsPerAggregate int, match string, cache
 	// making sure that all values we care about are pushed out of the buffer and processed.
 	//fmt.Println("adding", bufSize, "more to push through buffer")
 	for i := 0; i < bufSize; i++ {
-		buf := [][]byte{
+		buf := &util.Point{
 			[]byte("raw.abc.ignoreme"),
-			val,
-			tinfos[0].tsBuf,
+			float64(val),
+			tinfos[0].ts,
 		}
-		agg.AddMaybe(buf, 1, tinfos[0].ts)
+		agg.AddMaybe(buf)
 	}
 	// then, we keep updating the clock, triggering ticks, with high enough timestamps to surely flush the last aggregates.
 	// this so that if the aggregator is busy and doesn't read ticks, we keep trying until it isn't and does.

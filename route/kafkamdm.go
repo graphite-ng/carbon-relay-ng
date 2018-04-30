@@ -24,11 +24,11 @@ type KafkaMdm struct {
 	producer    sarama.SyncProducer
 	topic       string
 	brokers     []string
-	buf         chan []byte
+	buf         chan *util.Point
 	partitioner *partitioner.Kafka
 	schemas     persister.WhisperSchemas
 	blocking    bool
-	dispatch    func(chan []byte, []byte, metrics.Gauge, metrics.Counter)
+	dispatch    func(chan *util.Point, *util.Point, metrics.Gauge, metrics.Counter)
 
 	orgId int // organisation to publish data under
 
@@ -65,7 +65,7 @@ func NewKafkaMdm(key, prefix, sub, regex, topic, codec, schemasFile, partitionBy
 		baseRoute: baseRoute{sync.Mutex{}, atomic.Value{}, key},
 		topic:     topic,
 		brokers:   brokers,
-		buf:       make(chan []byte, bufSize),
+		buf:       make(chan *util.Point, bufSize),
 		schemas:   schemas,
 		blocking:  blocking,
 		orgId:     orgId,
@@ -191,7 +191,7 @@ func (r *KafkaMdm) run() {
 	}
 	for {
 		select {
-		case buf, ok := <-r.buf:
+		case point, ok := <-r.buf:
 			if !ok {
 				if len(metrics) != 0 {
 					flush()
@@ -199,7 +199,7 @@ func (r *KafkaMdm) run() {
 				return
 			}
 			r.numBuffered.Dec(1)
-			md, err := parseMetric(buf, r.schemas, r.orgId)
+			md, err := parseMetric(point, r.schemas, r.orgId)
 			if err != nil {
 				log.Error("KafkaMdm %q: %s", r.key, err)
 				continue
@@ -217,9 +217,9 @@ func (r *KafkaMdm) run() {
 	}
 }
 
-func (r *KafkaMdm) Dispatch(buf []byte) {
-	log.Info("kafkaMdm %q: sending to dest %v: %s", r.key, r.brokers, buf)
-	r.dispatch(r.buf, buf, r.numBuffered, r.numDropBuffFull)
+func (r *KafkaMdm) Dispatch(point *util.Point) {
+	log.Info("kafkaMdm %q: sending to dest %v: %s", r.key, r.brokers, point)
+	r.dispatch(r.buf, point, r.numBuffered, r.numDropBuffFull)
 }
 
 func (r *KafkaMdm) Flush() error {

@@ -60,7 +60,7 @@ func (b *Writer) flush() error {
 	if log.IsEnabledFor(logging.INFO) {
 		bufs := bytes.Split(b.buf[0:b.n], []byte{'\n'})
 		for _, buf := range bufs {
-			log.Info("bufWriter %s flush-writing to tcp %s\n", b.key, buf)
+			log.Debug("bufWriter %s flush-writing to tcp %s\n", b.key, buf)
 		}
 	}
 	n, err := b.wr.Write(b.buf[0:b.n])
@@ -97,7 +97,7 @@ func (b *Writer) Write(p []byte) (nn int, err error) {
 			// Write directly from p to avoid copy.
 			// we should measure this duration because it's equivalent to a flush
 			start := time.Now()
-			log.Info("bufWriter %s writing to tcp %s\n", b.key, p)
+			log.Debug("bufWriter %s writing to tcp %s\n", b.key, p)
 			n, b.err = b.wr.Write(p)
 			b.durationOverflowFlush.UpdateSince(start)
 		} else {

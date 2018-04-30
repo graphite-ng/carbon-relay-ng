@@ -4,15 +4,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
-type Datapoint struct {
-	Name string
-	Val  float64
-	Time uint32
-}
-
-func ParseDataPoint(buf []byte) (*Datapoint, error) {
+func ParseDataPoint(buf []byte) (*util.Point, error) {
 	str := strings.TrimSpace(string(buf))
 	elements := strings.Fields(str)
 	if len(elements) != 3 {
@@ -27,5 +23,5 @@ func ParseDataPoint(buf []byte) (*Datapoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Datapoint{name, val, uint32(timestamp)}, nil
+	return &util.Point{[]byte(name), val, uint32(timestamp)}, nil
 }

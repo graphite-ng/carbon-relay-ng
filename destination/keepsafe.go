@@ -3,12 +3,14 @@ package destination
 import (
 	"sync"
 	"time"
+
+	"github.com/graphite-ng/carbon-relay-ng/util"
 )
 
 type keepSafe struct {
 	initialCap int
-	safeOld    [][]byte
-	safeRecent [][]byte
+	safeOld    []*util.Point
+	safeRecent []*util.Point
 	periodKeep time.Duration // period to keep at least.  you get this period + a bit more
 	sync.Mutex
 }
@@ -16,8 +18,8 @@ type keepSafe struct {
 func NewKeepSafe(initialCap int, periodKeep time.Duration) *keepSafe {
 	k := keepSafe{
 		initialCap: initialCap,
-		safeOld:    make([][]byte, 0, initialCap),
-		safeRecent: make([][]byte, 0, initialCap),
+		safeOld:    make([]*util.Point, 0, initialCap),
+		safeRecent: make([]*util.Point, 0, initialCap),
 		periodKeep: periodKeep,
 	}
 	go k.keepClean()
@@ -29,22 +31,22 @@ func (k *keepSafe) keepClean() {
 	for range tick.C {
 		k.Lock()
 		k.safeOld = k.safeRecent
-		k.safeRecent = make([][]byte, 0, k.initialCap)
+		k.safeRecent = make([]*util.Point, 0, k.initialCap)
 		k.Unlock()
 	}
 }
 
-func (k *keepSafe) Add(buf []byte) {
+func (k *keepSafe) Add(point *util.Point) {
 	k.Lock()
-	k.safeRecent = append(k.safeRecent, buf)
+	k.safeRecent = append(k.safeRecent, point)
 	k.Unlock()
 }
 
-func (k *keepSafe) GetAll() [][]byte {
+func (k *keepSafe) GetAll() []*util.Point {
 	k.Lock()
 	ret := append(k.safeOld, k.safeRecent...)
-	k.safeOld = make([][]byte, 0, k.initialCap)
-	k.safeRecent = make([][]byte, 0, k.initialCap)
+	k.safeOld = make([]*util.Point, 0, k.initialCap)
+	k.safeRecent = make([]*util.Point, 0, k.initialCap)
 	k.Unlock()
 	return ret
 }

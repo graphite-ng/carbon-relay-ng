@@ -188,7 +188,7 @@ ReadLoop:
 			}
 
 			log.Debug("pickle.go: all good, dispatching metrics buffer")
-			p.table.Dispatch(buf, val, ts)
+			p.table.Dispatch(key, val, ts)
 
 			log.Debug("pickle.go: exiting ItemLoop")
 		}

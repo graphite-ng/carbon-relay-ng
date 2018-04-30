@@ -54,7 +54,7 @@ func init() {
 }
 
 func NewTableOrFatal(tb testing.TB, spool_dir, cmd string) *tbl.Table {
-	table := tbl.New(spool_dir)
+	table := tbl.New(spool_dir, 100)
 	fatal := func(err error) {
 		tb.Fatal(err)
 	}
@@ -299,8 +299,8 @@ func TestAddRewrite(t *testing.T) {
 
 // just dispatch (coming into table), no matching or sending to route
 func BenchmarkTableDispatch(b *testing.B) {
-	logging.SetLevel(logging.WARNING, "carbon-relay-ng")                                         // don't care about unroutable notices
-	metric70 := []byte("abcde_fghij.klmnopqrst.uv_wxyz.1234567890abcdefg 12345.6789 1234567890") // size: key = 48, val = 10, ts = 10 -> 70
+	logging.SetLevel(logging.WARNING, "carbon-relay-ng")                   // don't care about unroutable notices
+	metric70 := []byte("abcde_fghij.klmnopqrst.uv_wxyz.1234567890abcdefg") // size: key = 48, val = 10, ts = 10 -> 70
 	table := NewTableOrFatal(b, "", "")
 	for i := 0; i < b.N; i++ {
 		table.Dispatch(metric70, 12345.6789, 1234567890)
@@ -310,7 +310,7 @@ func BenchmarkTableDispatch(b *testing.B) {
 // i thought conn will drop messages because the tE tcp handler can't keep up.
 // but looks like that's not true (anymore?), it just works without having to sleep after dispatch
 // also note the dummyPackets uses a channel api which probably causes most of the slowdown
-func BenchmarkTableDisPatchAndEndpointReceive(b *testing.B) {
+func BenchmarkTableDispatchAndEndpointReceive(b *testing.B) {
 	logging.SetLevel(logging.WARNING, "carbon-relay-ng") // testendpoint sends a warning because it does something bad with conn at end but it's harmless
 	tE := NewTestEndpointCounter(b, ":2005")
 	tE.Start()
@@ -319,7 +319,7 @@ func BenchmarkTableDisPatchAndEndpointReceive(b *testing.B) {
 	// reminder: go benchmark will invoke this with N = 0, then maybe N = 20, then maybe more
 	// and the time it prints is function run divided by N, which
 	// should be of a more or less stable time, which gets printed
-	metric70 := []byte("abcde_fghij.klmnopqrst.uv_wxyz.1234567890abcdefg 12345.6789 1234567890") // size: key = 48, val = 10, ts = 10 -> 70
+	metric70 := []byte("abcde_fghij.klmnopqrst.uv_wxyz.1234567890abcdefg") // size: key = 48, val = 10, ts = 10 -> 70
 	dest, err := table.GetRoute("test1").GetDestination(0)
 	if err != nil {
 		panic(err)
