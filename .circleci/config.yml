@@ -4,6 +4,7 @@ jobs:
     working_directory: /go/src/github.com/graphite-ng/carbon-relay-ng
     docker:
       - image: circleci/golang:1.10.3
+      - image: rabbitmq
     steps:
       - checkout
       - run: go test -v -race ./...

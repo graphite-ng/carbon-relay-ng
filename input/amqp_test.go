@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graphite-ng/carbon-relay-ng/cfg"
 	"github.com/streadway/amqp"
 )
 
@@ -30,10 +31,14 @@ func getMockConnector() (chan amqp.Delivery, *MockClosable, *MockClosable, amqpC
 
 type mockDispatcher struct {
 	dispatchDuration time.Duration
+	receivedData     []byte
 }
 
-func (m *mockDispatcher) Dispatch(buf []byte) {}
-func (m *mockDispatcher) IncNumInvalid()      {}
+func (m *mockDispatcher) Dispatch(buf []byte) {
+	m.receivedData = append(m.receivedData, buf...)
+	time.Sleep(m.dispatchDuration)
+}
+func (m *mockDispatcher) IncNumInvalid() {}
 
 func TestMain(m *testing.M) {
 	_shutdownTimeout := shutdownTimeout
@@ -95,4 +100,22 @@ func TestAmqpFailingShutdown(t *testing.T) {
 	if !mockConn.closed || !mockChan.closed {
 		t.Fatalf("Expected channel and connection to be closed, but they were not")
 	}
+}
+
+// this test assumes that a rabbitmq is available on localhost
+func TestAmqpConsumeRabbit(t *testing.T) {
+	config := cfg.Config{
+		Amqp: cfg.Amqp{
+			Amqp_host:     "localhost",
+			Amqp_port:     5672,
+			Amqp_user:     "guest",
+			Amqp_password: "guest",
+			Amqp_vhost:    "guest_vhost",
+			Amqp_exchange: "guest_exchange",
+		},
+	}
+	dispatcher := &mockDispatcher{}
+
+	a := NewAMQP(config, dispatcher, AMQPConnector)
+	a.Start()
 }
