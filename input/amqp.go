@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/graphite-ng/carbon-relay-ng/cfg"
@@ -21,13 +22,14 @@ type Closable interface {
 }
 
 type Amqp struct {
-	workerPool
+	wg         sync.WaitGroup
 	uri        amqp.URI
 	conn       Closable
 	channel    Closable
 	config     cfg.Config
 	dispatcher Dispatcher
 	connect    amqpConnector
+	shutdown   chan struct{}
 }
 
 func (a *Amqp) close() {
@@ -35,9 +37,10 @@ func (a *Amqp) close() {
 	a.conn.Close()
 }
 
-func StartAMQP(config cfg.Config, dispatcher Dispatcher, connect amqpConnector) {
+func StartAMQP(config cfg.Config, dispatcher Dispatcher, connect amqpConnector) *Amqp {
 	a := NewAMQP(config, dispatcher, connect)
 	go a.Start()
+	return a
 }
 
 func NewAMQP(config cfg.Config, dispatcher Dispatcher, connect amqpConnector) *Amqp {
@@ -55,6 +58,7 @@ func NewAMQP(config cfg.Config, dispatcher Dispatcher, connect amqpConnector) *A
 		config:     config,
 		dispatcher: dispatcher,
 		connect:    connect,
+		shutdown:   make(chan struct{}),
 	}
 }
 
@@ -97,7 +101,6 @@ func AMQPConnector(a *Amqp) (<-chan amqp.Delivery, error) {
 }
 
 func (a *Amqp) Start() {
-	a.startStoppable()
 	b := &backoff.Backoff{
 		Min: 500 * time.Millisecond,
 	}
@@ -138,6 +141,16 @@ func (a *Amqp) Start() {
 			}
 		}
 	}
+}
+
+func (a *Amqp) Name() string {
+	return "amqp"
+}
+
+func (a *Amqp) Stop() bool {
+	close(a.shutdown)
+	a.wg.Wait()
+	return true
 }
 
 func (a *Amqp) consumeAMQP(c <-chan amqp.Delivery) {

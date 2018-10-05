@@ -9,8 +9,10 @@ import (
 	"net"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/pprof"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"github.com/Dieterbe/go-metrics"
@@ -36,6 +38,8 @@ var (
 	config_file      string
 	config           cfg.Config
 	to_dispatch      = make(chan []byte)
+	inputs           []input.Plugin
+	shutdownTimeout  = time.Second * 30 // how long to wait for shutdown
 	table            *tbl.Table
 	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
 	blockProfileRate = flag.Int("block-profile-rate", 0, "see https://golang.org/pkg/runtime/#SetBlockProfileRate")
@@ -187,23 +191,25 @@ func main() {
 	}
 
 	if config.Listen_addr != "" {
-		err = input.NewPlain(config.Listen_addr, table)
+		plugin, err := input.NewPlain(config.Listen_addr, table)
 		if err != nil {
 			log.Error(err.Error())
 			os.Exit(1)
 		}
+		inputs = append(inputs, plugin)
 	}
 
 	if config.Pickle_addr != "" {
-		err = input.NewPickle(config.Pickle_addr, table)
+		plugin, err := input.NewPickle(config.Pickle_addr, table)
 		if err != nil {
 			log.Error(err.Error())
 			os.Exit(1)
 		}
+		inputs = append(inputs, plugin)
 	}
 
 	if config.Amqp.Amqp_enabled == true {
-		input.StartAMQP(config, table, input.AMQPConnector)
+		inputs = append(inputs, input.StartAMQP(config, table, input.AMQPConnector))
 	}
 
 	if config.Admin_addr != "" {
@@ -220,11 +226,55 @@ func main() {
 		go web.Start(config.Http_addr, config, table)
 	}
 
-	select {}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// blocks until all inputs have been shut down
-	if !input.Stop() {
-		log.Error("Shutdown timed out, exiting")
+	select {
+	case sig := <-sigChan:
+		log.Info("Received signal %q. Shutting down", sig)
+	}
+	if !shutdown() {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func shutdown() bool {
+	results := make(chan bool)
+	for _, plugin := range inputs {
+		go func(plugin input.Plugin) {
+			log.Info("Shutting down %s input", plugin.Name())
+			res := plugin.Stop()
+			if res {
+				log.Info("%s input finished shutdown successfully", plugin.Name())
+			} else {
+				log.Error("%s input failed to shutdown cleanly", plugin.Name())
+			}
+			results <- res
+		}(plugin)
+	}
+	complete := make(chan bool)
+	go func() {
+		count := 0
+		success := true
+		for res := range results {
+
+			count++
+			success = success && res
+
+			if count == len(inputs) {
+				complete <- success
+				return
+			}
+		}
+	}()
+
+	select {
+	case res := <-complete:
+		return res
+	case <-time.After(shutdownTimeout):
+		log.Error("Input plugins taking too long to shutdown, not waiting any longer.")
+		return false
 	}
 }
 

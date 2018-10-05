@@ -9,9 +9,9 @@ type Plain struct {
 	dispatcher Dispatcher
 }
 
-func NewPlain(addr string, dispatcher Dispatcher) error {
-	listener := NewListener(&Plain{dispatcher})
-	return listener.listen(addr)
+func NewPlain(addr string, dispatcher Dispatcher) (*Listener, error) {
+	listener := NewListener("plain", &Plain{dispatcher})
+	return listener, listener.listen(addr)
 }
 
 func (p *Plain) Handle(c io.Reader) {
