@@ -38,13 +38,13 @@ func (l *Listener) listen(addr string) error {
 	}
 
 	l.wg.Add(2)
-	go l.accept(addr, "tcp", l.acceptTcp, l.listenTcp, l.tcpList)
-	go l.accept(addr, "udp", l.consumeUdp, l.listenUdp, l.udpConn)
+	go l.run(addr, "tcp", l.acceptTcp, l.listenTcp, l.tcpList)
+	go l.run(addr, "udp", l.consumeUdp, l.listenUdp, l.udpConn)
 
 	return nil
 }
 
-func (l *Listener) accept(addr, proto string, consume func(string), reconnect func(string) error, listener Closable) {
+func (l *Listener) run(addr, proto string, consume func(string), reconnect func(string) error, listener Closable) {
 	defer l.wg.Done()
 
 	backoffCounter := &backoff.Backoff{
@@ -67,24 +67,24 @@ func (l *Listener) accept(addr, proto string, consume func(string), reconnect fu
 		case <-l.shutdown:
 			return
 		default:
-			for {
-				log.Notice("reopening %v/%s", addr, proto)
-				err := reconnect(addr)
-				if err == nil {
-					backoffCounter.Reset()
-					break
-				}
-
-				backoffDuration := backoffCounter.Duration()
-				log.Error("error listening on %v/%s, retrying after %v: %s", addr, proto, backoffDuration, err)
-				select {
-				case <-l.shutdown:
-					log.Info("shutting down %v/%s, closing socket", addr, proto)
-					return
-				case <-time.After(backoffDuration):
-					// retry to connect
-				}
+		}
+		for {
+			log.Notice("reopening %v/%s", addr, proto)
+			err := reconnect(addr)
+			if err == nil {
+				backoffCounter.Reset()
+				break
 			}
+
+			select {
+			case <-l.shutdown:
+				log.Info("shutting down %v/%s, closing socket", addr, proto)
+				return
+			default:
+			}
+			backoffDuration := backoffCounter.Duration()
+			log.Error("error listening on %v/%s, retrying after %v: %s", addr, proto, backoffDuration, err)
+			<-time.After(backoffDuration)
 		}
 	}
 }
@@ -106,7 +106,6 @@ func (l *Listener) acceptTcp(addr string) {
 		c, err := l.tcpList.AcceptTCP()
 		if err != nil {
 			select {
-			// socket has been closed due to shut down, log and return
 			case <-l.shutdown:
 				return
 			default:
@@ -153,7 +152,6 @@ func (l *Listener) consumeUdp(addr string) {
 		b, src, err := l.udpConn.ReadFrom(buffer)
 		if err != nil {
 			select {
-			// socket has been closed due to shut down, log and return
 			case <-l.shutdown:
 				return
 			default:

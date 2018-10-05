@@ -110,18 +110,16 @@ func (a *Amqp) Start() {
 	for {
 		c, err := a.connect(a)
 		if err != nil {
-			// failed to connect; backoff and try again
-			log.Error("connectAMQP: %v", err)
-
-			d := b.Duration()
-			log.Info("retrying in %v", d)
 
 			select {
 			case <-a.shutdown:
 				log.Info("shutting down AMQP client")
 				return
-			case <-time.After(d):
+			default:
 			}
+			dur := b.Duration()
+			log.Error("connectAMQP: %v. retrying in %s", err, dur)
+			<-time.After(dur)
 		} else {
 			// connected successfully; reset backoff
 			b.Reset()
