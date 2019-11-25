@@ -103,14 +103,17 @@ rpm: build-linux
 	rm -rf redhat
 
 rpm-centos6: build-linux
-	mkdir build/centos-6
-	install -d redhat/usr/bin redhat/usr/share/man/man1 redhat/etc/carbon-relay-ng redhat/etc/init redhat/etc/init.d
+	mkdir -p build/centos-6
+	install -d redhat/usr/bin redhat/usr/share/man/man1 redhat/etc/carbon-relay-ng \
+		redhat/etc/init redhat/etc/init.d \
+		redhat/var/lib/carbon-relay-ng redhat/var/log/carbon-relay-ng
 	install carbon-relay-ng redhat/usr/bin
 	install man/man1/carbon-relay-ng.1 redhat/usr/share/man/man1
 	install examples/carbon-relay-ng.ini redhat/etc/carbon-relay-ng/carbon-relay-ng.conf
 	install examples/carbon-relay-ng.upstart-0.6.5 redhat/etc/init/carbon-relay-ng.conf
 	install examples/carbon-relay-ng.init redhat/etc/init.d/carbon-relay-ng
-	gzip redhat/usr/share/man/man1/carbon-relay-ng.1
+	gzip -f redhat/usr/share/man/man1/carbon-relay-ng.1
+	sed -i -e'/^pid_file =/c pid_file = "/var/run/carbon-relay-ng/carbon-relay-ng.pid"' redhat/etc/carbon-relay-ng/carbon-relay-ng.conf
 	fpm \
 		-s dir \
 		-t rpm \
@@ -118,12 +121,21 @@ rpm-centos6: build-linux
 		-v $(VERSION) \
 		--epoch 1 \
 		-a native \
+		--directories /var/lib/carbon-relay-ng \
+		--directories /var/log/carbon-relay-ng \
+		--rpm-attr 750,carbon-relay-ng,carbon-relay-ng:/var/lib/carbon-relay-ng \
+		--rpm-attr 750,carbon-relay-ng,carbon-relay-ng:/var/log/carbon-relay-ng \
 		--config-files etc/carbon-relay-ng/carbon-relay-ng.conf \
 		-p build/centos-6/carbon-relay-ng-VERSION.el6.ARCH.rpm \
 		-m "Dieter Plaetinck <dieter@grafana.com>" \
 		--description "Fast carbon relay+aggregator with admin interfaces for making changes online" \
 		--license BSD \
+		--rpm-digest sha256 \
 		--url https://github.com/graphite-ng/carbon-relay-ng \
+		--before-install examples/c6-before-install.sh \
+		--after-install  examples/c6-after-install.sh \
+		--before-remove  examples/c6-before-remove.sh \
+		--after-upgrade  examples/c6-after-upgrade.sh \
 		-C redhat .
 	rm -rf redhat
 
@@ -154,5 +166,8 @@ run-docker:
 
 clean:
 	rm -f carbon-relay-ng carbon-relay-ng.exe
+
+sterile: clean
+	rm -Rf build redhat *.rpm debian *.deb gh-pages
 
 .PHONY: all deb gh-pages install man test build clean build-linux

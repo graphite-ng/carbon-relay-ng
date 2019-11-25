@@ -14,13 +14,15 @@
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 NAME=carbon-relay-ng
-DAEMON=/usr/local/bin/$NAME
+DAEMON=/usr/bin/$NAME
 PIDFILE=/var/run/carbon-relay-ng/$NAME.pid
-CONFFILE=/etc/carbon-relay-ng.ini
+CONFFILE=/etc/carbon-relay-ng/carbon-relay-ng.conf
 DAEMON_ARGS=$CONFFILE
-SCRIPTNAME=/etc/init.d/$NAME
 
-[ -x "$DAEMON" ] || exit 0
+if [ ! -x "$DAEMON" ]; then
+    echo >&2 "$(basename "$0"): $DAEMON not found"
+    exit 1
+fi
 
 [ -r /etc/default/${NAME} ] && . /etc/default/${NAME}
 
@@ -28,8 +30,7 @@ SCRIPTNAME=/etc/init.d/$NAME
 [ -z "$RELAY_GROUP" ] && RELAY_GROUP="carbon-relay-ng"
 [ -z "$LOG_DIR" ] && LOG_DIR="/var/log/carbon-relay-ng"
 
-. /lib/init/vars.sh
-
+. /etc/init.d/functions
 . /lib/lsb/init-functions
 
 if [ ! -r $CONFFILE ]; then
@@ -39,56 +40,77 @@ fi
 
 do_start()
 {
+    echo -n "Starting $NAME"
+    PIDDIR="$(dirname "$PIDFILE")"
+    if [ "$PIDDIR" = "/var/run" ]; then
+        echo >&2 "Error: PIDFILE must live in a subdirectory of /var/run"
+        log_msg 2
+        return
+    fi
+    mkdir -p "$PIDDIR"
+    chown $RELAY_USER "$PIDDIR"
 	start-stop-daemon --no-close -c $RELAY_USER -d /var/lib/carbon-relay-ng --background --start --quiet --pidfile $PIDFILE --exec $DAEMON -- \
 		$DAEMON_ARGS >${LOG_DIR}/carbon-relay-ng.log 2>&1 \
-		|| return 2
+		|| { log_msg 2; return; }
+    log_msg 0
 }
 
 do_stop()
 {
+    echo -n "Stopping $NAME"
 	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE --name $NAME
-	RETVAL="$?"
-	[ "$RETVAL" = 2 ] && return 2
+	[ "$?" = 2 ] && { log_msg 2; return; }
 
 	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec $DAEMON
-	[ "$?" = 2 ] && return 2
+	[ "$?" = 2 ] && { log_msg 2; return; }
 
 	rm -f $PIDFILE
-	return "$RETVAL"
+    log_msg 0
 }
 
 do_reload() {
+    echo -n "Reloading $NAME"
 	start-stop-daemon --stop --quiet --pidfile $PIDFILE --signal USR2 --name $NAME
+    log_msg $?
+}
+
+log_msg() {
+    case "$1" in
+        0|1) echo_success ;;
+        2) echo_failure ;;
+    esac
+    echo
 }
 
 case "$1" in
-	start)
-	log_daemon_msg "Starting $NAME"
-	do_start
-	case "$?" in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
-	esac
-	;;
-	stop)
-	log_daemon_msg "Stopping $NAME"
-	do_stop
-	case "$?" in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
-	esac
-	;;
-	status)
-	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
-	;;
-	restart|force-reload)
-	log_daemon_msg "Reloading $NAME"
-	do_reload
-	;;
-	*)
-	echo "Usage: $SCRIPTNAME {start|stop|status|restart|force-reload}" >&2
-	exit 3
-	;;
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    status)
+        status -b "$DAEMON" -p "$PIDFILE" && exit 0 || exit $?
+        ;;
+    restart)
+        do_stop
+        do_start
+        ;;
+    condrestart)
+        if ! status -b "$DAEMON" -p "$PIDFILE"; then
+            echo "Not running"
+            exit 0
+        fi
+        do_stop
+        do_start
+        ;;
+    force-reload)
+        do_reload
+        ;;
+    *)
+        echo "Usage: $(basename "$0") {start|stop|status|restart|condrestart|force-reload}" >&2
+        exit 3
+        ;;
 esac
 
 :
