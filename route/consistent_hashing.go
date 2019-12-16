@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/binary"
-	dest "github.com/graphite-ng/carbon-relay-ng/destination"
 	"sort"
 	"strconv"
 	"strings"
+
+	dest "github.com/graphite-ng/carbon-relay-ng/destination"
 )
 
 type hashRingEntry struct {
@@ -85,6 +86,18 @@ func (h *ConsistentHasher) AddDestination(d *dest.Destination) {
 		keyBuf.WriteString(":")
 		keyBuf.WriteString(strconv.Itoa(i))
 		position := computeRingPosition(keyBuf.Bytes())
+		//Align with https://github.com/graphite-project/carbon/commit/024f9e67ca47619438951c59154c0dec0b0518c7#diff-1486787206e06af358b8d935577e76f5
+	outer:
+		for {
+			for i := 0; i < len(h.Ring); i++ {
+				if position == h.Ring[i].Position {
+					position++
+					continue outer
+				}
+			}
+			break
+		}
+
 		newRingEntries[i].Position = position
 		newRingEntries[i].Hostname = server[0]
 		newRingEntries[i].Instance = d.Instance
