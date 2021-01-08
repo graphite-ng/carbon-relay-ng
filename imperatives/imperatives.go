@@ -68,6 +68,7 @@ const (
 	optSASLEnabled
 	optSASLUsername
 	optSASLPassword
+	optKafkaVersion
 	optUnspoolSleep
 	optPickle
 	optSpool
@@ -131,6 +132,7 @@ var tokens = []toki.Def{
 	{Token: optSASLEnabled, Pattern: "saslEnabled="},
 	{Token: optSASLUsername, Pattern: "saslUsername="},
 	{Token: optSASLPassword, Pattern: "saslPassword="},
+	{Token: optKafkaVersion, Pattern: "kafkaVersion="},
 	{Token: optUnspoolSleep, Pattern: "unspoolsleep="},
 	{Token: optPickle, Pattern: "pickle="},
 	{Token: optSpool, Pattern: "spool="},
@@ -696,6 +698,7 @@ func readAddRouteKafkaMdm(s *toki.Scanner, table Table) error {
 	var blocking = false
 	var tlsEnabled, tlsSkipVerify bool
 	var tlsClientCert, tlsClientKey string
+	var kafkaVersion string
 	var saslEnabled bool
 	var saslUsername, saslPassword string
 
@@ -806,12 +809,18 @@ func readAddRouteKafkaMdm(s *toki.Scanner, table Table) error {
 				return errFmtAddRouteKafkaMdm
 			}
 			saslPassword = string(t.Value)
+		case optKafkaVersion:
+			t = s.Next()
+			if t.Token != word {
+				return errFmtAddRouteKafkaMdm
+			}
+			kafkaVersion = string(t.Value)
 		default:
 			return fmt.Errorf("unexpected token %d %q", t.Token, t.Value)
 		}
 	}
 
-	route, err := route.NewKafkaMdm(key, matcher, topic, codec, schemasFile, partitionBy, brokers, bufSize, orgId, flushMaxNum, flushMaxWait, timeout, blocking, tlsEnabled, tlsSkipVerify, tlsClientCert, tlsClientKey, saslEnabled, saslUsername, saslPassword)
+	route, err := route.NewKafkaMdm(key, matcher, topic, codec, schemasFile, partitionBy, kafkaVersion, brokers, bufSize, orgId, flushMaxNum, flushMaxWait, timeout, blocking, tlsEnabled, tlsSkipVerify, tlsClientCert, tlsClientKey, saslEnabled, saslUsername, saslPassword)
 	if err != nil {
 		return err
 	}

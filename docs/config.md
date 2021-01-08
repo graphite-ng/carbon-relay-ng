@@ -234,6 +234,7 @@ topic          |     Y     |  string     | N/A     |
 codec          |     Y     |  string     | N/A     | which compression to use. possible values: none, gzip, snappy
 partitionBy    |     Y     |  string     | N/A     | which fields to shard by. possible values are: byOrg, bySeries, bySeriesWithTags
 schemasFile    |     Y     |  string     | N/A     |
+kafkaVersion   |     N     |  string     | ""      | Kafka version in semver format. All brokers must be this version or newer. (fallback to oldest stable version 1.0.0)
 prefix         |     N     |  string     | ""      |
 notPrefix      |     N     |  string     | ""      |
 sub            |     N     |  string     | ""      |
@@ -264,6 +265,7 @@ brokers = ['kafka:9092']
 topic = 'mdm'
 codec = 'snappy'
 partitionBy = 'bySeriesWithTags'
+kafkaVersion = '2.0.0'
 schemasFile = 'conf/storage-schemas.conf'
 tlsEnabled = true
 tlsSkipVerify  = false

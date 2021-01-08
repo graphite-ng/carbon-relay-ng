@@ -32,8 +32,8 @@ type KafkaMdm struct {
 	schemas       persister.WhisperSchemas
 	blocking      bool
 	dispatch      func(chan []byte, []byte, metrics.Gauge, metrics.Counter)
-
-	orgId int // organisation to publish data under
+	kafkaVersion  sarama.KafkaVersion
+	orgId         int // organisation to publish data under
 
 	bufSize      int // amount of messages we can buffer up. each message is about 100B. so 1e7 is about 1GB.
 	flushMaxNum  int
@@ -52,7 +52,7 @@ type KafkaMdm struct {
 
 // NewKafkaMdm creates a special route that writes to a grafana.net datastore
 // We will automatically run the route and the destination
-func NewKafkaMdm(key string, matcher matcher.Matcher, topic, codec, schemasFile, partitionBy string, brokers []string, bufSize, orgId, flushMaxNum, flushMaxWait, timeout int, blocking bool, tlsEnabled, tlsSkipVerify bool, tlsClientCert, tlsClientKey string, saslEnabled bool, saslUsername, saslPassword string) (Route, error) {
+func NewKafkaMdm(key string, matcher matcher.Matcher, topic, codec, schemasFile, partitionBy, kafkaVersion string, brokers []string, bufSize, orgId, flushMaxNum, flushMaxWait, timeout int, blocking bool, tlsEnabled, tlsSkipVerify bool, tlsClientCert, tlsClientKey string, saslEnabled bool, saslUsername, saslPassword string) (Route, error) {
 	schemas, err := getSchemas(schemasFile)
 	if err != nil {
 		return nil, err
@@ -69,10 +69,9 @@ func NewKafkaMdm(key string, matcher matcher.Matcher, topic, codec, schemasFile,
 		blocking:  blocking,
 		orgId:     orgId,
 
-		bufSize:      bufSize,
-		flushMaxNum:  flushMaxNum,
-		flushMaxWait: time.Duration(flushMaxWait) * time.Millisecond,
-
+		bufSize:           bufSize,
+		flushMaxNum:       flushMaxNum,
+		flushMaxWait:      time.Duration(flushMaxWait) * time.Millisecond,
 		numErrFlush:       stats.Counter("dest=" + cleanAddr + ".unit=Err.type=flush"),
 		numOut:            stats.Counter("dest=" + cleanAddr + ".unit=Metric.direction=out"),
 		durationTickFlush: stats.Timer("dest=" + cleanAddr + ".what=durationFlush.type=ticker"),
@@ -96,11 +95,19 @@ func NewKafkaMdm(key string, matcher matcher.Matcher, topic, codec, schemasFile,
 		log.Fatalf("kafkaMdm %q: failed to initialize partitioner. %s", r.key, err)
 	}
 
+	kfkVersion, err := sarama.ParseKafkaVersion(kafkaVersion)
+	if err != nil {
+		log.Warnf("kafkaMdm %q: failed to parse kafka version fallback to default version. %s", r.key, err)
+		//ParseKafkaVersion() will return an error and sarama.DefaultVersion
+		//this means that we have the same behavior that we had before this was configurable.
+	}
+	r.kafkaVersion = kfkVersion
+
 	// We are looking for strong consistency semantics.
 	// Because we don't change the flush settings, sarama will try to produce messages
 	// as fast as possible to keep latency low.
 	config := sarama.NewConfig()
-
+	config.Version = r.kafkaVersion
 	if tlsEnabled {
 		tlsConfig, err := tls.NewConfig(tlsClientCert, tlsClientKey)
 		if err != nil {

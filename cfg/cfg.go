@@ -105,6 +105,7 @@ type Route struct {
 	Topic         string // also used by Google PubSub
 	Codec         string // also used by Google PubSub
 	PartitionBy   string
+	KafkaVersion  string
 	TLSEnabled    bool
 	TLSSkipVerify bool
 	TLSClientCert string
