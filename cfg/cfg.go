@@ -1,8 +1,13 @@
 package cfg
 
 import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/grafana/carbon-relay-ng/validate"
 	m20 "github.com/metrics20/go-metrics20/carbon20"
 )
@@ -33,7 +38,7 @@ type Config struct {
 	Rewriter                []Rewriter
 }
 
-func NewConfig() Config {
+func New() Config {
 	return Config{
 		Plain_read_timeout: Duration{
 			2 * time.Minute,
@@ -43,6 +48,40 @@ func NewConfig() Config {
 		},
 		Validation_level_legacy: validate.LevelLegacy{m20.MediumLegacy},
 		Validation_level_m20:    validate.LevelM20{m20.MediumM20},
+	}
+}
+
+func NewFromFile(path string) (Config, toml.MetaData, error) {
+	config := New()
+	var meta toml.MetaData
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return config, meta, fmt.Errorf("Couldn't read config file %q: %s", path, err.Error())
+	}
+
+	dataStr := os.Expand(string(data), expandVars)
+	meta, err = toml.Decode(dataStr, &config)
+	if err != nil {
+		return config, meta, fmt.Errorf("Invalid config file %q: %s", path, err.Error())
+	}
+	return config, meta, nil
+}
+
+func expandVars(in string) (out string) {
+	switch in {
+	case "HOST":
+		hostname, _ := os.Hostname()
+		// in case hostname is an fqdn or has dots, only take first part
+		parts := strings.SplitN(hostname, ".", 2)
+		return parts[0]
+	case "GRAFANA_NET_ADDR":
+		return os.Getenv("GRAFANA_NET_ADDR")
+	case "GRAFANA_NET_API_KEY":
+		return os.Getenv("GRAFANA_NET_API_KEY")
+	case "GRAFANA_NET_USER_ID":
+		return os.Getenv("GRAFANA_NET_USER_ID")
+	default:
+		return "$" + in
 	}
 }
 

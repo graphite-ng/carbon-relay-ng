@@ -6,7 +6,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"net"
 	_ "net/http/pprof"
 	"os"
@@ -15,7 +14,6 @@ import (
 	"runtime/pprof"
 	"syscall"
 
-	"github.com/BurntSushi/toml"
 	"github.com/Dieterbe/go-metrics"
 	"github.com/grafana/carbon-relay-ng/aggregator"
 	"github.com/grafana/carbon-relay-ng/badmetrics"
@@ -37,7 +35,6 @@ import (
 
 var (
 	config_file      string
-	config           = cfg.NewConfig()
 	to_dispatch      = make(chan []byte)
 	inputs           []input.Plugin
 	shutdownTimeout  = time.Second * 30 // how long to wait for shutdown
@@ -59,34 +56,6 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-func readConfigFile(config_file string) string {
-	data, err := ioutil.ReadFile(config_file)
-	if err != nil {
-		log.Fatalf("Couldn't read config file %q: %s", config_file, err.Error())
-	}
-
-	return os.Expand(string(data), expandVars)
-
-}
-
-func expandVars(in string) (out string) {
-	switch in {
-	case "HOST":
-		hostname, _ := os.Hostname()
-		// in case hostname is an fqdn or has dots, only take first part
-		parts := strings.SplitN(hostname, ".", 2)
-		return parts[0]
-	case "GRAFANA_NET_ADDR":
-		return os.Getenv("GRAFANA_NET_ADDR")
-	case "GRAFANA_NET_API_KEY":
-		return os.Getenv("GRAFANA_NET_API_KEY")
-	case "GRAFANA_NET_USER_ID":
-		return os.Getenv("GRAFANA_NET_USER_ID")
-	default:
-		return "$" + in
-	}
-}
-
 func main() {
 
 	flag.Usage = usage
@@ -104,10 +73,9 @@ func main() {
 		config_file = val
 	}
 
-	config_str := readConfigFile(config_file)
-	meta, err := toml.Decode(config_str, &config)
+	config, meta, err := cfg.NewFromFile(config_file)
 	if err != nil {
-		log.Fatalf("Invalid config file %q: %s", config_file, err.Error())
+		log.Fatal(err)
 	}
 	//runtime.SetBlockProfileRate(1) // to enable block profiling. in my experience, adds 35% overhead.
 
