@@ -11,6 +11,8 @@ import (
 	"github.com/grafana/metrictank/schema"
 )
 
+var errInvalidKey = errors.New("invalid metric key")
+
 func getSchemas(file string) (persister.WhisperSchemas, error) {
 	schemas, err := persister.ReadWhisperSchemas(file)
 	if err != nil {
@@ -61,6 +63,13 @@ func parseMetric(buf []byte, schemas persister.WhisperSchemas, orgId int) (*sche
 	timestamp, err := strconv.ParseUint(elements[2], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf(errFmt, msg, err)
+	}
+
+	// skip over all leading dots, like graphite does
+	// if the key is nothing but dots, it's invalid
+	elements[0] = strings.TrimLeft(elements[0], ".")
+	if len(elements[0]) == 0 {
+		return nil, errInvalidKey
 	}
 
 	nameWithTags := elements[0]

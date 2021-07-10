@@ -25,6 +25,75 @@ func getMatchEverythingSchemas() persister.WhisperSchemas {
 	return schema
 }
 
+func TestParseMetricErrors(t *testing.T) {
+	schemas := getMatchEverythingSchemas()
+	cases := []struct {
+		in     string
+		expErr bool
+		expOut schema.MetricData
+	}{
+		{
+			"foo 123 123",
+			false,
+			schema.MetricData{
+				Name:     "foo",
+				Metric:   "foo",
+				Interval: 10,
+				Value:    123,
+				Unit:     "unknown",
+				Time:     123,
+				Mtype:    "gauge",
+				Tags:     []string{},
+				OrgId:    1,
+			},
+		},
+		{
+			".foo 123 123",
+			false,
+			schema.MetricData{
+				Name:     "foo",
+				Metric:   "foo",
+				Interval: 10,
+				Value:    123,
+				Unit:     "unknown",
+				Time:     123,
+				Mtype:    "gauge",
+				Tags:     []string{},
+				OrgId:    1,
+			},
+		},
+		{
+			"......f 123 123",
+			false,
+			schema.MetricData{
+				Name:     "f",
+				Metric:   "f",
+				Interval: 10,
+				Value:    123,
+				Unit:     "unknown",
+				Time:     123,
+				Mtype:    "gauge",
+				Tags:     []string{},
+				OrgId:    1,
+			},
+		},
+		{
+			in:     "...... 123 123",
+			expErr: true,
+		},
+	}
+	for i, c := range cases {
+		out, err := parseMetric([]byte(c.in), schemas, 1)
+		if (err == nil) == c.expErr {
+			t.Fatalf("test %d exp err %t, got err %v", i, c.expErr, err)
+		}
+		if err == nil {
+			if !reflect.DeepEqual(c.expOut, *out) {
+				t.Fatalf("test %d exp out %v, got %v", i, c.expOut, *out)
+			}
+		}
+	}
+}
 func TestParseMetricWithTags(t *testing.T) {
 	schemas := getMatchEverythingSchemas()
 	tags := []string{"tag2=value2", "tag1=value1"}
